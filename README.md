@@ -1,4 +1,4 @@
-# Prismarine
+# PrismarineLCE
 a launcher for Minecraft Legacy Console Edition
 
 ## build
