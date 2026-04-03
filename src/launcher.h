@@ -29,13 +29,28 @@ struct ReleaseInfo {
     std::string GetUniqueId() const { return tag + "|" + published_at; }
 };
 
+struct SkinInfo {
+    std::string name;
+    std::string path;
+};
+
+struct ServerEntry {
+    char name[64] = "Server";
+    char ip[128] = "";
+    char port[16] = "25565";
+};
+
 struct LaunchConfig {
     char username[64] = "Player";
     char ip[128] = "";
     char port[16] = "25565";
     bool is_server = false;
     bool use_wine = false;
+    bool fullscreen = false;
     int selected_version = 0;
+    int selected_skin = -1;
+    std::vector<SkinInfo> skins;
+    std::vector<ServerEntry> server_list;
 };
 
 class Launcher {
@@ -47,8 +62,15 @@ public:
     void DownloadAndInstall(int release_index);
     void UpdateExeOnly(int release_index);
     void Launch();
+    void ScanSkins();
     void LoadConfig();
     void SaveConfig();
+
+    void LoadServerList();
+    void SaveServerList();
+    void AddServer(const ServerEntry& entry);
+    void RemoveServer(int idx);
+    void UpdateServer(int idx, const ServerEntry& entry);
 
     LauncherState GetState() const;
     float GetProgress() const;

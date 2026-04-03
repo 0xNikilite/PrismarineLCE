@@ -15,6 +15,14 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+struct SkinTexture {
+    GLuint tex = 0;
+    int w = 0, h = 0;
+    std::string path;
+};
+
+static std::vector<SkinTexture> g_skin_textures;
+
 static ImFont* g_font_sm = nullptr;
 static ImFont* g_font_md = nullptr;
 static ImFont* g_font_lg = nullptr;
@@ -91,6 +99,18 @@ static bool LoadTextureFromFile(const char* filename, GLuint* out_tex, int* out_
     stbi_image_free(data);
     *out_tex = tex; *out_w = iw; *out_h = ih;
     return true;
+}
+
+static void EnsureSkinTextureLoaded(const std::string& path) {
+    for (auto& st : g_skin_textures) if (st.path == path) return;
+    GLuint tex; int w, h;
+    if (LoadTextureFromFile(path.c_str(), &tex, &w, &h))
+        g_skin_textures.push_back({tex, w, h, path});
+}
+
+static void CleanupSkinTextures() {
+    for (auto& st : g_skin_textures) if (st.tex) glDeleteTextures(1, &st.tex);
+    g_skin_textures.clear();
 }
 
 static void DrawDirtBG(ImDrawList* dl, ImVec2 pos, ImVec2 size) {
@@ -235,8 +255,14 @@ int main() {
     Launcher launcher;
     launcher.FetchReleases();
     launcher.LoadConfig();
+    launcher.ScanSkins();
 
-    bool show_options = false, show_profile = false;
+    bool show_options = false, show_profile = false, show_skins = false, show_servers = false;
+    int editing_server_idx = -1;
+    bool show_server_edit = false;
+    char edit_srv_name[64] = "";
+    char edit_srv_ip[128] = "";
+    char edit_srv_port[16] = "25565";
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -272,13 +298,16 @@ int main() {
         bool disabled = (st == LauncherState::Downloading || st == LauncherState::Extracting ||
                          st == LauncherState::GameRunning || st == LauncherState::FetchingReleases);
 
-        float layout_h = 48 + 8 + 16 + 4 + 16 + 20 + 40 + 12 + 54 + 8 + 40 + 8 + 34;
+        // --- layout: title + subtitle + username + version + play/install + update + progress
+        //     + 3 buttons row + 2 buttons row
+        float layout_h = 48 + 8 + 16 + 4 + 16 + 20 + 40 + 12 + 54 + 8 + 44 + 8 + 38;
         if (show_update_btn) layout_h += 32 + 8;
         if (show_progress) layout_h += 42 + 8;
 
         float y = (h - layout_h) * 0.5f;
         if (y < 10) y = 10;
 
+        // Title
         ImGui::PushFont(g_font_xl);
         {
             const char* t = "PrismarineLCE";
@@ -288,6 +317,7 @@ int main() {
         ImGui::PopFont();
         y += 48 + 8;
 
+        // Subtitle
         ImGui::PushFont(g_font_sm);
         {
             const char* s = "Minecraft Legacy Console Edition";
@@ -297,6 +327,7 @@ int main() {
         ImGui::PopFont();
         y += 16 + 4;
 
+        // Username
         ImGui::PushFont(g_font_sm);
         {
             char ut[128];
@@ -307,6 +338,7 @@ int main() {
         ImGui::PopFont();
         y += 16 + 20;
 
+        // Version combo
         if (!releases.empty()) {
             ImGui::SetCursorPos(ImVec2(cx, y));
             ImGui::PushFont(g_font_md);
@@ -344,6 +376,7 @@ int main() {
         }
         y += 40 + 12;
 
+        // Play / Install button
         ImGui::SetCursorPos(ImVec2(cx, y));
         if (game_exists) {
             const char* play_label = "Play";
@@ -374,6 +407,7 @@ int main() {
         }
         y += 54 + 8;
 
+        // Update button
         if (show_update_btn) {
             ImGui::SetCursorPos(ImVec2(cx, y));
             if (MCButton("Update Available - Click to Update", ImVec2(btn_w, 32), g_font_sm))
@@ -381,6 +415,7 @@ int main() {
             y += 32 + 8;
         }
 
+        // Progress bar
         if (show_progress) {
             ImGui::SetCursorPos(ImVec2(cx, y));
             DrawProgressBar(ImGui::GetCursorScreenPos(), ImVec2(btn_w, 16), launcher.GetProgress());
@@ -396,15 +431,22 @@ int main() {
             y += 42 + 8;
         }
 
-        float half = (btn_w - 8) * .5f;
+        // Row of 3: Profile, Options, Skins
+        float third = (btn_w - 12) / 3.f;
         ImGui::SetCursorPos(ImVec2(cx, y));
-        if (MCButton("Profile", ImVec2(half, 40), g_font_md)) show_profile = true;
-        ImGui::SetCursorPos(ImVec2(cx + half + 8, y));
-        if (MCButton("Options", ImVec2(half, 40), g_font_md)) show_options = true;
+        if (MCButton("Profile", ImVec2(third, 40), g_font_md)) show_profile = true;
+        ImGui::SetCursorPos(ImVec2(cx + third + 4, y));
+        if (MCButton("Options", ImVec2(third, 40), g_font_md)) show_options = true;
+        ImGui::SetCursorPos(ImVec2(cx + 2 * (third + 4), y));
+        if (MCButton("Skins", ImVec2(third, 40), g_font_md)) show_skins = true;
         y += 40 + 8;
 
+        // Row of 2: Servers, Open Game Folder
+        float half = (btn_w - 8) / 2.f;
         ImGui::SetCursorPos(ImVec2(cx, y));
-        if (MCButton("Open Game Folder", ImVec2(btn_w, 34), g_font_sm)) {
+        if (MCButton("Servers", ImVec2(half, 34), g_font_sm)) show_servers = true;
+        ImGui::SetCursorPos(ImVec2(cx + half + 8, y));
+        if (MCButton("Open Game Folder", ImVec2(half, 34), g_font_sm)) {
 #ifdef _WIN32
             std::string path = launcher.GetInstallDir().string();
             fs::create_directories(launcher.GetInstallDir());
@@ -415,31 +457,39 @@ int main() {
             std::system(cmd.c_str());
 #endif
         }
+        y += 34 + 4;
 
+        // Bottom path
         {
             ImGui::PushFont(g_font_sm);
             std::string dir_str = launcher.GetInstallDir().string();
             float dw2 = ImGui::CalcTextSize(dir_str.c_str()).x;
-            float dy = h - 28, dx = (w-dw2)*.5f;
+            float fdy = h - 28, fdx = (w-dw2)*.5f;
             ImVec2 scr = ImGui::GetWindowPos();
             float fh = ImGui::GetFontSize();
-            dl->AddRectFilled(ImVec2(scr.x+dx-8, scr.y+dy-3),
-                ImVec2(scr.x+dx+dw2+8, scr.y+dy+fh+3), IM_COL32(0,0,0,160));
-            ShadowText(dl, ImVec2(scr.x+dx, scr.y+dy), ToU32(MCColor::Gray()), dir_str.c_str());
+            dl->AddRectFilled(ImVec2(scr.x+fdx-8, scr.y+fdy-3),
+                ImVec2(scr.x+fdx+dw2+8, scr.y+fdy+fh+3), IM_COL32(0,0,0,160));
+            ShadowText(dl, ImVec2(scr.x+fdx, scr.y+fdy), ToU32(MCColor::Gray()), dir_str.c_str());
             ImGui::PopFont();
         }
 
+
+        // ============ OPTIONS MODAL ============
         if (show_options) { ImGui::OpenPopup("##opts"); show_options = false; }
-        ImVec2 msz(500, 400);
+
+        ImVec2 msz(500, 420);
         ImGui::SetNextWindowSize(msz, ImGuiCond_Always);
         ImGui::SetNextWindowPos(ImVec2((w-msz.x)*.5f, (h-msz.y)*.5f), ImGuiCond_Always);
+
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(30,24));
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, MCColor::BgPanel());
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.f);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, MCColor::BgPanel());
         ImGui::PushStyleColor(ImGuiCol_Border, MCColor::Black());
 
         if (ImGui::BeginPopupModal("##opts", nullptr,
             ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoTitleBar)) {
+
+            // Title
             ImGui::PushFont(g_font_lg);
             ImVec2 cp = ImGui::GetCursorScreenPos();
             dl->AddText(ImVec2(cp.x+2,cp.y+2), IM_COL32(0,0,0,200), "Options");
@@ -449,51 +499,97 @@ int main() {
 
             ImGui::PushFont(g_font_md);
             ImGui::PushItemWidth(-1);
+
+            // Server dropdown or placeholder
             ImGui::PushStyleColor(ImGuiCol_Text, MCColor::Gray());
-            ImGui::Text("Server IP");
+            ImGui::Text("Default Server");
             ImGui::PopStyleColor();
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10,10));
+
+            if (!cfg.server_list.empty()) {
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10,10));
+                ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 2.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, MCColor::White());
+                if (ImGui::BeginCombo("##server", cfg.ip)) {
+                    for (int i = 0; i < (int)cfg.server_list.size(); i++) {
+                        bool sel = (std::string(cfg.ip) == std::string(cfg.server_list[i].ip) &&
+                                    std::string(cfg.port) == std::string(cfg.server_list[i].port));
+                        if (ImGui::Selectable(cfg.server_list[i].name, sel)) {
+                            std::strncpy(cfg.ip, cfg.server_list[i].ip, sizeof(cfg.ip) - 1);
+                            cfg.ip[sizeof(cfg.ip) - 1] = '\0';
+                            std::strncpy(cfg.port, cfg.server_list[i].port, sizeof(cfg.port) - 1);
+                            cfg.port[sizeof(cfg.port) - 1] = '\0';
+                        }
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::PopStyleColor(1);
+                ImGui::PopStyleVar(2);
+            } else {
+                ImGui::SetNextItemWidth(-1);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10,10));
+                ImGui::PushStyleColor(ImGuiCol_Text, MCColor::DarkGray());
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, MCColor::DarkGray());
+                ImGui::InputText("##servernone", (char*)"Add a server below", 0, ImGuiInputTextFlags_ReadOnly);
+                ImGui::PopStyleColor(2);
+                ImGui::PopStyleVar(1);
+            }
+            ImGui::Spacing();
+
+            // Manual IP / Port
+            ImGui::PushStyleColor(ImGuiCol_Text, MCColor::Gray());
+            ImGui::Text("Or manually enter:");
+            ImGui::PopStyleColor();
+            ImGui::Spacing();
+
+            float opt_half = (ImGui::GetContentRegionAvail().x - 8) * .5f;
+            ImGui::SetNextItemWidth(opt_half);
             ImGui::InputText("##ip", cfg.ip, sizeof(cfg.ip));
-            ImGui::PopStyleVar();
-            ImGui::Spacing();
-
-            ImGui::PushStyleColor(ImGuiCol_Text, MCColor::Gray());
-            ImGui::Text("Port");
-            ImGui::PopStyleColor();
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10,10));
+            ImGui::SameLine(0, 8);
+            ImGui::SetNextItemWidth(opt_half);
             ImGui::InputText("##port", cfg.port, sizeof(cfg.port));
-            ImGui::PopStyleVar();
             ImGui::Spacing();
 
+            ImGui::Checkbox("Fullscreen", &cfg.fullscreen);
             ImGui::Checkbox("Headless Server (-server)", &cfg.is_server);
 #ifndef _WIN32
             ImGui::Checkbox("Use Wine", &cfg.use_wine);
 #endif
+
             ImGui::PopItemWidth();
             ImGui::PopFont();
-            ImGui::Spacing(); ImGui::Spacing(); ImGui::Spacing();
+            ImGui::Spacing(); ImGui::Spacing();
 
-            if (MCButtonColored("Done", ImVec2(-1, 54),
-                MCColor::Green(), ImVec4(.4f,.75f,.26f,1), MCColor::GreenDark(), g_font_lg)) {
+            float btn_h2 = 34;
+            float btn_w2 = (msz.x - 76) * .5f;
+            if (MCButton("Manage Servers", ImVec2(btn_w2, btn_h2), g_font_sm)) show_servers = true;
+            ImGui::SameLine(0, 8);
+            if (MCButtonColored("Done", ImVec2(btn_w2, btn_h2),
+                MCColor::Green(), ImVec4(.4f,.75f,.26f,1), MCColor::GreenDark(), g_font_sm)) {
                 launcher.SaveConfig();
                 ImGui::CloseCurrentPopup();
             }
+
             ImGui::EndPopup();
         }
         ImGui::PopStyleColor(2);
         ImGui::PopStyleVar(2);
 
+
+        // ============ PROFILE MODAL ============
         if (show_profile) { ImGui::OpenPopup("##prof"); show_profile = false; }
         ImVec2 psz(500, 280);
         ImGui::SetNextWindowSize(psz, ImGuiCond_Always);
         ImGui::SetNextWindowPos(ImVec2((w-psz.x)*.5f, (h-psz.y)*.5f), ImGuiCond_Always);
+
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(30,24));
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, MCColor::BgPanel());
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.f);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, MCColor::BgPanel());
         ImGui::PushStyleColor(ImGuiCol_Border, MCColor::Black());
 
         if (ImGui::BeginPopupModal("##prof", nullptr,
             ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoTitleBar)) {
+
             ImGui::PushFont(g_font_lg);
             ImVec2 cp = ImGui::GetCursorScreenPos();
             dl->AddText(ImVec2(cp.x+2,cp.y+2), IM_COL32(0,0,0,200), "Profile");
@@ -518,6 +614,252 @@ int main() {
                 launcher.SaveConfig();
                 ImGui::CloseCurrentPopup();
             }
+
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
+
+
+        // ============ SKINS MODAL ============
+        if (show_skins) { ImGui::OpenPopup("##skins"); show_skins = false; }
+        ImVec2 sksz(600, 460);
+        ImGui::SetNextWindowSize(sksz, ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2((w-sksz.x)*.5f, (h-sksz.y)*.5f), ImGuiCond_Always);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20,20));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.f);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, MCColor::BgPanel());
+        ImGui::PushStyleColor(ImGuiCol_Border, MCColor::Black());
+
+        if (ImGui::BeginPopupModal("##skins", nullptr,
+            ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoTitleBar)) {
+
+            ImGui::PushFont(g_font_lg);
+            dl->AddText(ImVec2(ImGui::GetCursorScreenPos().x+2,ImGui::GetCursorScreenPos().y+2), IM_COL32(0,0,0,200), "Select Skin");
+            ImGui::Text("Select Skin");
+            ImGui::PopFont();
+            ImGui::Separator();
+
+            if (cfg.skins.empty()) {
+                ImGui::PushFont(g_font_md);
+                ImGui::PushStyleColor(ImGuiCol_Text, MCColor::DarkGray());
+                ImGui::Text("No skins found in game directory.");
+                ImGui::Text("Skins are loaded from Windows64/ folder.");
+                ImGui::PopStyleColor();
+                ImGui::PopFont();
+            } else {
+                float skin_w = 128, skin_h = 128;
+                int skin_cols = (int)((sksz.x - 60) / (skin_w + 12));
+                if (skin_cols < 1) skin_cols = 1;
+
+                ImGui::BeginChild("##skin_list", ImVec2(sksz.x - 40, sksz.y - 120), true);
+                for (int i = 0; i < (int)cfg.skins.size(); i++) {
+                    EnsureSkinTextureLoaded(cfg.skins[i].path);
+                    int col = i % skin_cols;
+                    int row = i / skin_cols;
+                    ImVec2 spos = ImVec2(10 + col * (skin_w + 12), row * (skin_h + 16 + 30));
+                    ImGui::SetCursorPos(spos);
+
+                    bool sel = (i == cfg.selected_skin);
+                    std::string btn_id = "##skin_sel_" + std::to_string(i);
+                    ImGui::InvisibleButton(btn_id.c_str(), ImVec2(skin_w, skin_h + 16 + 20));
+                    bool clicked = ImGui::IsItemClicked();
+                    bool hov = ImGui::IsItemHovered();
+
+                    ImVec2 sp = ImGui::GetItemRectMin();
+                    ImVec2 sm = ImGui::GetItemRectMax();
+
+                    ImU32 borderColor = sel ? ToU32(MCColor::Green()) : (hov ? ToU32(MCColor::StoneLight()) : ToU32(MCColor::Stone()));
+
+                    GLuint tex = 0;
+                    for (auto& st : g_skin_textures) {
+                        if (st.path == cfg.skins[i].path) { tex = st.tex; break; }
+                    }
+
+                    if (tex) {
+                        ImVec2 img_pos(sp.x + 4, sp.y + 4);
+                        ImVec2 img_size(skin_w - 8, skin_h - 12);
+                        dl->AddRectFilled(sp, sm, ToU32(MCColor::StoneDark()), 2);
+                        dl->AddImage((void*)(intptr_t)tex, img_pos,
+                            ImVec2(img_pos.x + img_size.x, img_pos.y + img_size.x),
+                            ImVec2(0,0), ImVec2(1,0.25f));
+                    } else {
+                        dl->AddRectFilled(sp, sm, ToU32(MCColor::StoneDark()));
+                    }
+
+                    dl->AddRect(sp, sm, borderColor, 2, 0, 3);
+                    if (sel) dl->AddRect(sp, sm, ToU32(MCColor::Green()), 2, 0, 2);
+
+                    ImVec2 name_pos(sp.x, sp.y + skin_h + 4);
+                    std::string sname = cfg.skins[i].name;
+                    if (sname.size() > 16) sname = sname.substr(0, 16);
+                    dl->AddText(name_pos, sel ? ToU32(MCColor::Green()) : ToU32(MCColor::Gray()), sname.c_str());
+
+                    if (clicked) cfg.selected_skin = i;
+                }
+                ImGui::EndChild();
+            }
+            ImGui::Separator();
+
+            if (MCButtonColored("Save & Close", ImVec2(sksz.x - 40, 54),
+                MCColor::Green(), ImVec4(.4f,.75f,.26f,1), MCColor::GreenDark(), g_font_lg)) {
+                launcher.SaveConfig();
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
+
+
+        // ============ SERVER LIST MODAL ============
+        if (show_servers) { ImGui::OpenPopup("##srvlist"); show_servers = false; }
+        ImVec2 srvsz(500, 400);
+        ImGui::SetNextWindowSize(srvsz, ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2((w-srvsz.x)*.5f, (h-srvsz.y)*.5f), ImGuiCond_Always);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20,20));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.f);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, MCColor::BgPanel());
+        ImGui::PushStyleColor(ImGuiCol_Border, MCColor::Black());
+
+        if (ImGui::BeginPopupModal("##srvlist", nullptr,
+            ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoTitleBar)) {
+
+            ImGui::PushFont(g_font_lg);
+            dl->AddText(ImVec2(ImGui::GetCursorScreenPos().x+2,ImGui::GetCursorScreenPos().y+2), IM_COL32(0,0,0,200), "Server List");
+            ImGui::Text("Server List");
+            ImGui::PopFont();
+            ImGui::Separator();
+
+            ImGui::BeginChild("##srv_list", ImVec2(srvsz.x - 40, srvsz.y - 180), true);
+            ImGui::PushFont(g_font_sm);
+            for (int i = 0; i < (int)cfg.server_list.size(); i++) {
+                std::string item = std::string(cfg.server_list[i].name) + " (" +
+                                   cfg.server_list[i].ip + ":" + cfg.server_list[i].port + ")";
+                ImGui::PushID(i);
+                float row_w = srvsz.x - 80;
+                float small_w = 30;
+                float btn_w3 = (row_w - 8 - 8) - (small_w + 4 + small_w + 4);
+                if (MCButton(item.c_str(), ImVec2(btn_w3, 32), g_font_sm)) {
+                    std::strncpy(cfg.ip, cfg.server_list[i].ip, sizeof(cfg.ip) - 1);
+                    cfg.ip[sizeof(cfg.ip) - 1] = '\0';
+                    std::strncpy(cfg.port, cfg.server_list[i].port, sizeof(cfg.port) - 1);
+                    cfg.port[sizeof(cfg.port) - 1] = '\0';
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine(0, 4);
+                if (MCButton("Edit", ImVec2(small_w, 32))) {
+                    editing_server_idx = i;
+                    std::strncpy(edit_srv_name, cfg.server_list[i].name, sizeof(edit_srv_name) - 1);
+                    edit_srv_name[sizeof(edit_srv_name) - 1] = '\0';
+                    std::strncpy(edit_srv_ip, cfg.server_list[i].ip, sizeof(edit_srv_ip) - 1);
+                    edit_srv_ip[sizeof(edit_srv_ip) - 1] = '\0';
+                    std::strncpy(edit_srv_port, cfg.server_list[i].port, sizeof(edit_srv_port) - 1);
+                    edit_srv_port[sizeof(edit_srv_port) - 1] = '\0';
+                    show_server_edit = true;
+                }
+                ImGui::SameLine(0, 4);
+                if (MCButtonColored("X", ImVec2(small_w, 32), MCColor::Dirt(), ImVec4(.4f,.25f,.15f,1), MCColor::DirtDark())) {
+                    launcher.RemoveServer(i);
+                }
+                ImGui::PopID();
+            }
+            if (cfg.server_list.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, MCColor::DarkGray());
+                ImGui::Text("No servers added yet.");
+                ImGui::PopStyleColor();
+            }
+            ImGui::PopFont();
+            ImGui::EndChild();
+
+            ImGui::Spacing();
+            if (MCButton("Add Server", ImVec2(srvsz.x - 40, 32), g_font_sm)) {
+                editing_server_idx = -1;
+                edit_srv_name[0] = '\0';
+                edit_srv_ip[0] = '\0';
+                std::strncpy(edit_srv_port, "25565", sizeof(edit_srv_port) - 1);
+                show_server_edit = true;
+            }
+            ImGui::Separator();
+
+            if (MCButtonColored("Done", ImVec2(srvsz.x - 40, 32),
+                MCColor::Green(), ImVec4(.4f,.75f,.26f,1), MCColor::GreenDark(), g_font_sm)) {
+                launcher.SaveConfig();
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
+
+
+        // ============ SERVER EDIT MODAL ============
+        if (show_server_edit) { ImGui::OpenPopup("##srvedit"); show_server_edit = false; }
+        ImVec2 edtsz(400, 300);
+        ImGui::SetNextWindowSize(edtsz, ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2((w-edtsz.x)*.5f, (h-edtsz.y)*.5f), ImGuiCond_Always);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20,20));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.f);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, MCColor::BgPanel());
+        ImGui::PushStyleColor(ImGuiCol_Border, MCColor::Black());
+
+        if (ImGui::BeginPopupModal("##srvedit", nullptr,
+            ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoTitleBar)) {
+
+            ImGui::PushFont(g_font_lg);
+            ImGui::Text(editing_server_idx >= 0 ? "Edit Server" : "Add Server");
+            ImGui::PopFont();
+            ImGui::Separator();
+
+            ImGui::PushFont(g_font_sm);
+            ImGui::PushItemWidth(-1);
+            ImGui::Spacing();
+
+            ImGui::PushStyleColor(ImGuiCol_Text, MCColor::Gray());
+            ImGui::Text("Name");
+            ImGui::PopStyleColor();
+            ImGui::InputText("##srvname", edit_srv_name, sizeof(edit_srv_name));
+
+            ImGui::Spacing();
+            ImGui::PushStyleColor(ImGuiCol_Text, MCColor::Gray());
+            ImGui::Text("IP");
+            ImGui::PopStyleColor();
+            ImGui::InputText("##srvip", edit_srv_ip, sizeof(edit_srv_ip));
+
+            ImGui::Spacing();
+            ImGui::PushStyleColor(ImGuiCol_Text, MCColor::Gray());
+            ImGui::Text("Port");
+            ImGui::PopStyleColor();
+            ImGui::InputText("##srvport", edit_srv_port, sizeof(edit_srv_port));
+
+            ImGui::PopItemWidth();
+            ImGui::PopFont();
+            ImGui::Spacing();
+
+            if (MCButtonColored("Save", ImVec2(edtsz.x - 40, 32),
+                MCColor::Green(), ImVec4(.4f,.75f,.26f,1), MCColor::GreenDark(), g_font_sm)) {
+                ServerEntry entry;
+                std::strncpy(entry.name, edit_srv_name, sizeof(entry.name) - 1);
+                entry.name[sizeof(entry.name) - 1] = '\0';
+                std::strncpy(entry.ip, edit_srv_ip, sizeof(entry.ip) - 1);
+                entry.ip[sizeof(entry.ip) - 1] = '\0';
+                std::strncpy(entry.port, edit_srv_port, sizeof(entry.port) - 1);
+                entry.port[sizeof(entry.port) - 1] = '\0';
+                if (editing_server_idx >= 0)
+                    launcher.UpdateServer(editing_server_idx, entry);
+                else
+                    launcher.AddServer(entry);
+                launcher.SaveConfig();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (MCButton("Cancel", ImVec2(-1, 32), g_font_sm)) ImGui::CloseCurrentPopup();
+
             ImGui::EndPopup();
         }
         ImGui::PopStyleColor(2);
@@ -536,6 +878,7 @@ int main() {
     }
 
     if (g_dirt_texture) glDeleteTextures(1, &g_dirt_texture);
+    CleanupSkinTextures();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

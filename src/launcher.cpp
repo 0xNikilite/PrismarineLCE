@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
+#include <algorithm>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -40,10 +41,12 @@ static std::vector<std::string> JsonSplitArray(const std::string& json) {
             continue;
         }
         if (in_string) continue;
-        if (c == '{' || c == '[') {
+        
+        // Only track object depths {} to effectively split arrays of objects
+        if (c == '{') {
             if (depth == 0) start = i;
             depth++;
-        } else if (c == '}' || c == ']') {
+        } else if (c == '}') {
             depth--;
             if (depth == 0) items.push_back(json.substr(start, i - start + 1));
         }
@@ -168,6 +171,20 @@ std::string Launcher::HttpGet(const std::string& url) {
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "PrismarineLCE/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+    const char* token = std::getenv("GITHUB_TOKEN");
+    if (token && std::strlen(token) > 0) {
+        std::string auth = "Authorization: token ";
+        auth += token;
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, auth.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        CURLcode r = curl_easy_perform(curl);
+        curl_slist_free_all(headers);
+        if (r != CURLE_OK) return "";
+        curl_easy_cleanup(curl);
+        return response;
+    }
     CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
     if (res != CURLE_OK) return "";
@@ -221,8 +238,15 @@ void Launcher::FetchReleases() {
         std::string url = std::string("https://api.github.com/repos/")
             + REPO_OWNER + "/" + REPO_NAME + "/releases";
         std::string response = HttpGet(url);
+
         if (response.empty()) {
             SetStatus("Failed to connect to GitHub");
+            state = LauncherState::Error;
+            return;
+        }
+
+        if (JsonExtractString(response, "message") == "API rate limit exceeded") {
+            SetStatus("GitHub API rate limit exceeded. Try again later or set GITHUB_TOKEN.");
             state = LauncherState::Error;
             return;
         }
@@ -386,6 +410,7 @@ void Launcher::Launch() {
         std::string args;
         if (std::strlen(config.username) > 0)
             args += " -name \"" + std::string(config.username) + "\"";
+        if (config.fullscreen) args += " -fullscreen";
         if (config.is_server) args += " -server";
         if (std::strlen(config.ip) > 0)
             args += " -ip \"" + std::string(config.ip) + "\"";
@@ -434,6 +459,39 @@ void Launcher::Launch() {
     });
 }
 
+void Launcher::ScanSkins() {
+    config.skins.clear();
+    fs::path dir = GetInstallDir() / "Windows64";
+    if (!fs::exists(dir)) return;
+
+    std::vector<std::string> skin_dirs;
+    for (auto& entry : fs::directory_iterator(dir)) {
+        if (entry.is_directory()) {
+            std::string name = entry.path().filename().string();
+            if (name.find("skin") != std::string::npos ||
+                std::any_of(name.begin(), name.end(), [](char c) { return c >= 'A' && c <= 'Z'; })) {
+                skin_dirs.push_back(entry.path().string());
+            }
+        }
+    }
+
+    if (skin_dirs.empty()) skin_dirs.push_back((GetInstallDir() / "Windows64").string());
+
+    for (auto& sd : skin_dirs) {
+        for (auto& e : fs::directory_iterator(sd)) {
+            if (e.path().extension() == ".png" || e.path().extension() == ".PNG") {
+                SkinInfo info;
+                info.name = e.path().filename().string();
+                info.path = e.path().string();
+                config.skins.push_back(info);
+            }
+        }
+    }
+
+    std::sort(config.skins.begin(), config.skins.end(),
+        [](const SkinInfo& a, const SkinInfo& b) { return a.name < b.name; });
+}
+
 void Launcher::LoadConfig() {
     fs::path cfg_file = GetInstallDir() / "prismarine.cfg";
     if (!fs::exists(cfg_file)) return;
@@ -457,8 +515,13 @@ void Launcher::LoadConfig() {
             config.is_server = (val == "1");
         } else if (key == "use_wine") {
             config.use_wine = (val == "1");
+        } else if (key == "fullscreen") {
+            config.fullscreen = (val == "1");
+        } else if (key == "skin") {
+            config.selected_skin = std::stoi(val);
         }
     }
+    LoadServerList();
 }
 
 void Launcher::SaveConfig() {
@@ -470,4 +533,53 @@ void Launcher::SaveConfig() {
     f << "port=" << config.port << "\n";
     f << "is_server=" << (config.is_server ? "1" : "0") << "\n";
     f << "use_wine=" << (config.use_wine ? "1" : "0") << "\n";
+    f << "fullscreen=" << (config.fullscreen ? "1" : "0") << "\n";
+    f << "skin=" << config.selected_skin << "\n";
+    SaveServerList();
+}
+
+void Launcher::LoadServerList() {
+    config.server_list.clear();
+    fs::path path = GetInstallDir() / "servers.cfg";
+    if (!fs::exists(path)) return;
+    std::ifstream f(path);
+    std::string line;
+    ServerEntry entry;
+    while (std::getline(f, line)) {
+        size_t sep = line.find('|');
+        size_t sep2 = line.find('|', sep + 1);
+        if (sep == std::string::npos || sep2 == std::string::npos) continue;
+        std::string n = line.substr(0, sep);
+        std::string i = line.substr(sep + 1, sep2 - sep - 1);
+        std::string p = line.substr(sep2 + 1);
+        std::strncpy(entry.name, n.c_str(), sizeof(entry.name) - 1);
+        entry.name[sizeof(entry.name) - 1] = '\0';
+        std::strncpy(entry.ip, i.c_str(), sizeof(entry.ip) - 1);
+        entry.ip[sizeof(entry.ip) - 1] = '\0';
+        std::strncpy(entry.port, p.c_str(), sizeof(entry.port) - 1);
+        entry.port[sizeof(entry.port) - 1] = '\0';
+        config.server_list.push_back(entry);
+    }
+}
+
+void Launcher::SaveServerList() {
+    fs::create_directories(GetInstallDir());
+    fs::path path = GetInstallDir() / "servers.cfg";
+    std::ofstream f(path);
+    for (auto& s : config.server_list)
+        f << s.name << "|" << s.ip << "|" << s.port << "\n";
+}
+
+void Launcher::AddServer(const ServerEntry& entry) {
+    config.server_list.push_back(entry);
+}
+
+void Launcher::RemoveServer(int idx) {
+    if (idx >= 0 && idx < (int)config.server_list.size())
+        config.server_list.erase(config.server_list.begin() + idx);
+}
+
+void Launcher::UpdateServer(int idx, const ServerEntry& entry) {
+    if (idx >= 0 && idx < (int)config.server_list.size())
+        config.server_list[idx] = entry;
 }
