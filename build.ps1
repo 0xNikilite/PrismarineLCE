@@ -16,17 +16,17 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "`n BUILD OK" -ForegroundColor Green
 
 if ($Package) {
-    $out = "Prismarine-win64"
+    $out = "PrismarineLCE-win64"
     Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
-    Remove-Item -Force "Prismarine-win64.zip" -ErrorAction SilentlyContinue
+    Remove-Item -Force "PrismarineLCE-win64.zip" -ErrorAction SilentlyContinue
     mkdir $out | Out-Null
     mkdir "$out/assets" | Out-Null
-    Copy-Item "build/Release/Prismarine.exe" "$out/"
+    Copy-Item "build/Release/PrismarineLCE.exe" "$out/"
     Copy-Item "assets/Minecraft.ttf" "$out/assets/"
     Copy-Item "assets/dirt.png" "$out/assets/"
-    Compress-Archive -Path "$out/*" -DestinationPath "Prismarine-win64.zip" -Force
+    Compress-Archive -Path "$out/*" -DestinationPath "PrismarineLCE-win64.zip" -Force
     Remove-Item -Recurse -Force $out
-    Write-Host " Prismarine-win64.zip created" -ForegroundColor Green
+    Write-Host " PrismarineLCE-win64.zip created" -ForegroundColor Green
 }
 
-Write-Host " Run: .\build\Release\Prismarine.exe" -ForegroundColor Cyan
+Write-Host " Run: .\build\Release\PrismarineLCE.exe" -ForegroundColor Cyan

@@ -207,7 +207,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    GLFWwindow* window = glfwCreateWindow(960, 540, "Prismarine", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(960, 540, "PrismarineLCE", nullptr, nullptr);
     if (!window) return 1;
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
@@ -281,7 +281,7 @@ int main() {
 
         ImGui::PushFont(g_font_xl);
         {
-            const char* t = "Prismarine";
+            const char* t = "PrismarineLCE";
             float tw = ImGui::CalcTextSize(t).x;
             ShadowText(dl, ImVec2((w-tw)*.5f, y), ToU32(MCColor::White()), t);
         }

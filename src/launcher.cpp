@@ -165,7 +165,7 @@ std::string Launcher::HttpGet(const std::string& url) {
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "Prismarine/1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "PrismarineLCE/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     CURLcode res = curl_easy_perform(curl);
@@ -183,7 +183,7 @@ bool Launcher::DownloadFile(const std::string& url, const fs::path& dest) {
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "Prismarine/1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "PrismarineLCE/1.0");
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, ProgressCallback);
     curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, this);
