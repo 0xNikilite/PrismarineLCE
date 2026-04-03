@@ -1,0 +1,37 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (vcpkg)
+        run: vcpkg install curl:x64-windows-static
+
+      - name: Build and Package
+        run: .\build.ps1 -Clean -Package
+        shell: powershell
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.event.inputs.version }} `
+            "PrismarineLCE-win64.zip" `
+            "build/Release/PrismarineLCE.exe" `
+            --title "${{ github.event.inputs.version }}" `
+            --generate-notes
