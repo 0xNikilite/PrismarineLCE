@@ -1,5 +1,5 @@
 # PrismarineLCE
-a small (less than 1MB) launcher for Minecraft Legacy Console Edition
+a small (~1MB) launcher for Minecraft Legacy Console Edition
 
 ## build
 
