@@ -481,7 +481,7 @@ int main() {
         // ============ OPTIONS MODAL ============
         if (show_options) { ImGui::OpenPopup("##opts"); show_options = false; }
 
-        ImVec2 msz(500, 420);
+        ImVec2 msz(500, 520);
         ImGui::SetNextWindowSize(msz, ImGuiCond_Always);
         ImGui::SetNextWindowPos(ImVec2((w-msz.x)*.5f, (h-msz.y)*.5f), ImGuiCond_Always);
 
@@ -570,6 +570,20 @@ int main() {
 
             ImGui::PopItemWidth();
             ImGui::PopFont();
+            ImGui::Spacing(); ImGui::Spacing();
+
+            ImGui::PushStyleColor(ImGuiCol_Text, MCColor::Yellow());
+            ImGui::Text("Troubleshooting");
+            ImGui::PopStyleColor();
+            
+            if (MCButtonColored("Force Full Game Reinstall (Download ~778MB)", ImVec2(-1, 32),
+                MCColor::Stone(), MCColor::StoneLight(), MCColor::StoneDark(), g_font_sm)) {
+                
+                if (!releases.empty() && st == LauncherState::Idle) {
+                    ImGui::CloseCurrentPopup();
+                    launcher.DownloadAndInstall(cfg.selected_version, true);
+                }
+            }
             ImGui::Spacing(); ImGui::Spacing();
 
             float btn_h2 = 34;

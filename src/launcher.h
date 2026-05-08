@@ -60,7 +60,7 @@ public:
     ~Launcher();
 
     void FetchReleases();
-    void DownloadAndInstall(int release_index);
+    void DownloadAndInstall(int release_index, bool force_zip = false);
     void Launch();
     void ScanSkins();
     void LoadConfig();

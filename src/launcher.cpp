@@ -335,15 +335,15 @@ void Launcher::FetchReleases() {
         });
 }
 
-void Launcher::DownloadAndInstall(int idx) {
+void Launcher::DownloadAndInstall(int idx, bool force_zip) {
     if (state != LauncherState::Idle && state != LauncherState::Error) return;
     if (idx < 0 || idx >= (int)releases.size()) return;
     if (worker.joinable()) worker.join();
 
-    worker = std::thread([this, idx]() {
+    worker = std::thread([this, idx, force_zip]() {
         const ReleaseInfo& rel = releases[idx];
 
-        if (HasGameFiles() && rel.has_exe) {
+        if (HasGameFiles() && rel.has_exe && !force_zip) {
             state = LauncherState::Downloading;
             progress = 0.0f;
             SetStatus("Updating Minecraft.Client.exe...");
