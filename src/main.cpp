@@ -6,6 +6,9 @@
 #include "launcher.h"
 #include <cstdio>
 #include <cmath>
+#include <string>
+#include <vector>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -103,9 +106,10 @@ static bool LoadTextureFromFile(const char* filename, GLuint* out_tex, int* out_
 
 static void EnsureSkinTextureLoaded(const std::string& path) {
     for (auto& st : g_skin_textures) if (st.path == path) return;
-    GLuint tex; int w, h;
-    if (LoadTextureFromFile(path.c_str(), &tex, &w, &h))
-        g_skin_textures.push_back({tex, w, h, path});
+    GLuint tex = 0; int w = 0, h = 0;
+    LoadTextureFromFile(path.c_str(), &tex, &w, &h);
+    // Adds a 0 texture id if failed to avoid constant stbi_load retries overhead
+    g_skin_textures.push_back({tex, w, h, path});
 }
 
 static void CleanupSkinTextures() {
@@ -506,10 +510,18 @@ int main() {
             ImGui::PopStyleColor();
 
             if (!cfg.server_list.empty()) {
+                std::string current_server_name = "Select a Server...";
+                for (auto& s : cfg.server_list) {
+                    if (std::string(cfg.ip) == s.ip && std::string(cfg.port) == s.port) {
+                        current_server_name = s.name;
+                        break;
+                    }
+                }
+
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10,10));
                 ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 2.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, MCColor::White());
-                if (ImGui::BeginCombo("##server", cfg.ip)) {
+                if (ImGui::BeginCombo("##server", current_server_name.c_str())) {
                     for (int i = 0; i < (int)cfg.server_list.size(); i++) {
                         bool sel = (std::string(cfg.ip) == std::string(cfg.server_list[i].ip) &&
                                     std::string(cfg.port) == std::string(cfg.server_list[i].port));

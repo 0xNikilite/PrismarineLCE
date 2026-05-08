@@ -6,6 +6,7 @@
 #include <thread>
 #include <mutex>
 #include <filesystem>
+#include <system_error>
 
 namespace fs = std::filesystem;
 
@@ -60,7 +61,6 @@ public:
 
     void FetchReleases();
     void DownloadAndInstall(int release_index);
-    void UpdateExeOnly(int release_index);
     void Launch();
     void ScanSkins();
     void LoadConfig();
@@ -84,7 +84,7 @@ public:
 
 private:
     static constexpr const char* REPO_OWNER = "smartcmd";
-    static constexpr const char* REPO_NAME  = "MinecraftConsoles";
+    static constexpr const char* REPO_NAME = "MinecraftConsoles";
     static constexpr const char* TARGET_ZIP = "LCEWindows64.zip";
     static constexpr const char* TARGET_EXE = "Minecraft.Client.exe";
 
@@ -100,8 +100,9 @@ private:
     bool DownloadFile(const std::string& url, const fs::path& dest);
     bool ExtractZip(const fs::path& zip_path, const fs::path& dest_dir);
 
-    std::atomic<LauncherState> state{LauncherState::Idle};
-    std::atomic<float> progress{0.0f};
+    std::atomic<LauncherState> state{ LauncherState::Idle };
+    std::atomic<float> progress{ 0.0f };
+    std::atomic<bool> abort_op{ false };
     char status_text[256] = "Ready";
     std::mutex mutex;
     std::thread worker;

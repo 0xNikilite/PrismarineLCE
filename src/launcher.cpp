@@ -23,10 +23,28 @@ static std::string JsonExtractString(const std::string& json, const std::string&
     if (pos == std::string::npos) return "";
     size_t end = pos + 1;
     while (end < json.size() && json[end] != '"') {
-        if (json[end] == '\\') end++;
+        if (json[end] == '\\') {
+            end++;
+            if (end >= json.size()) break;
+        }
         end++;
     }
-    return json.substr(pos + 1, end - pos - 1);
+    if (pos + 1 >= json.size() || pos + 1 >= end) return "";
+    std::string raw = json.substr(pos + 1, end - pos - 1);
+    std::string result;
+    for (size_t i = 0; i < raw.size(); i++) {
+        if (raw[i] == '\\' && i + 1 < raw.size()) {
+            char next = raw[i + 1];
+            if (next == 'n') result += '\n';
+            else if (next == 't') result += '\t';
+            else result += next;
+            i++;
+        }
+        else {
+            result += raw[i];
+        }
+    }
+    return result;
 }
 
 static std::vector<std::string> JsonSplitArray(const std::string& json) {
@@ -36,17 +54,18 @@ static std::vector<std::string> JsonSplitArray(const std::string& json) {
     bool in_string = false;
     for (size_t i = 0; i < json.size(); i++) {
         char c = json[i];
-        if (c == '"' && (i == 0 || json[i-1] != '\\')) {
+        if (c == '"' && (i == 0 || json[i - 1] != '\\')) {
             in_string = !in_string;
             continue;
         }
         if (in_string) continue;
-        
+
         // Only track object depths {} to effectively split arrays of objects
         if (c == '{') {
             if (depth == 0) start = i;
             depth++;
-        } else if (c == '}') {
+        }
+        else if (c == '}') {
             depth--;
             if (depth == 0) items.push_back(json.substr(start, i - start + 1));
         }
@@ -65,7 +84,7 @@ static std::string JsonGetArray(const std::string& json, const std::string& key)
     bool in_string = false;
     for (; end < json.size(); end++) {
         char c = json[end];
-        if (c == '"' && (end == 0 || json[end-1] != '\\')) {
+        if (c == '"' && (end == 0 || json[end - 1] != '\\')) {
             in_string = !in_string;
             continue;
         }
@@ -73,10 +92,15 @@ static std::string JsonGetArray(const std::string& json, const std::string& key)
         if (c == '[') depth++;
         else if (c == ']') {
             depth--;
-            if (depth == 0) break;
+            if (depth == 0) {
+                end++; // include the closing bracket
+                break;
+            }
         }
     }
-    return json.substr(pos, end - pos + 1);
+    if (pos >= json.size()) return "";
+    if (end > json.size()) end = json.size();
+    return json.substr(pos, end - pos);
 }
 
 Launcher::Launcher() {
@@ -84,7 +108,15 @@ Launcher::Launcher() {
 }
 
 Launcher::~Launcher() {
-    if (worker.joinable()) worker.join();
+    abort_op = true;
+    if (worker.joinable()) {
+        if (state == LauncherState::GameRunning) {
+            worker.detach();
+        }
+        else {
+            worker.join();
+        }
+    }
     curl_global_cleanup();
 }
 
@@ -156,6 +188,7 @@ size_t Launcher::WriteCallback(void* contents, size_t size, size_t nmemb, void* 
 
 int Launcher::ProgressCallback(void* clientp, double dltotal, double dlnow, double, double) {
     auto* launcher = static_cast<Launcher*>(clientp);
+    if (launcher->abort_op) return 1; // trigger curl abort
     if (dltotal > 0)
         launcher->progress = static_cast<float>(dlnow / dltotal);
     return 0;
@@ -171,6 +204,9 @@ std::string Launcher::HttpGet(const std::string& url) {
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "PrismarineLCE/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, ProgressCallback);
+    curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, this);
 
     const char* token = std::getenv("GITHUB_TOKEN");
     if (token && std::strlen(token) > 0) {
@@ -239,6 +275,8 @@ void Launcher::FetchReleases() {
             + REPO_OWNER + "/" + REPO_NAME + "/releases";
         std::string response = HttpGet(url);
 
+        if (abort_op) return;
+
         if (response.empty()) {
             SetStatus("Failed to connect to GitHub");
             state = LauncherState::Error;
@@ -268,7 +306,8 @@ void Launcher::FetchReleases() {
                 if (asset_name == TARGET_ZIP) {
                     info.zip_url = dl_url;
                     info.has_zip = true;
-                } else if (asset_name == TARGET_EXE) {
+                }
+                else if (asset_name == TARGET_EXE) {
                     info.exe_url = dl_url;
                     info.has_exe = true;
                 }
@@ -285,14 +324,15 @@ void Launcher::FetchReleases() {
         if (releases.empty()) {
             SetStatus("No compatible releases found");
             state = LauncherState::Error;
-        } else {
+        }
+        else {
             std::string msg = "Found: " + releases[0].name;
             if (releases[0].published_at.size() >= 10)
                 msg += " (" + releases[0].published_at.substr(0, 10) + ")";
             SetStatus(msg.c_str());
             state = LauncherState::Idle;
         }
-    });
+        });
 }
 
 void Launcher::DownloadAndInstall(int idx) {
@@ -313,6 +353,7 @@ void Launcher::DownloadAndInstall(int idx) {
                 fs::remove(exe_dest, ec);
             }
             if (!DownloadFile(rel.exe_url, exe_dest)) {
+                if (abort_op) return;
                 SetStatus("Download failed");
                 state = LauncherState::Error;
                 return;
@@ -334,55 +375,31 @@ void Launcher::DownloadAndInstall(int idx) {
         SetStatus("Downloading LCEWindows64.zip (~778 MB)...");
 
         if (!DownloadFile(rel.zip_url, GetZipPath())) {
+            if (abort_op) return;
             SetStatus("Download failed");
             state = LauncherState::Error;
             return;
         }
+
+        if (abort_op) return;
 
         state = LauncherState::Extracting;
         progress = 0.0f;
         SetStatus("Extracting game files...");
 
         if (!ExtractZip(GetZipPath(), GetInstallDir())) {
+            if (abort_op) return;
             SetStatus("Extraction failed");
             state = LauncherState::Error;
             return;
         }
 
-        SaveInstalledId(rel.GetUniqueId());
-        SetStatus("Ready to play!");
-        state = LauncherState::Idle;
-    });
-}
-
-void Launcher::UpdateExeOnly(int idx) {
-    if (idx < 0 || idx >= (int)releases.size()) return;
-    if (!releases[idx].has_exe) return;
-    if (state != LauncherState::Idle && state != LauncherState::Error) return;
-    if (worker.joinable()) worker.join();
-
-    worker = std::thread([this, idx]() {
-        const ReleaseInfo& rel = releases[idx];
-        state = LauncherState::Downloading;
-        progress = 0.0f;
-        SetStatus("Updating Minecraft.Client.exe...");
-
-        fs::path exe_dest = GetExePath();
-        if (fs::exists(exe_dest)) {
-            std::error_code ec;
-            fs::remove(exe_dest, ec);
-        }
-
-        if (!DownloadFile(rel.exe_url, exe_dest)) {
-            SetStatus("Update failed");
-            state = LauncherState::Error;
-            return;
-        }
+        if (abort_op) return;
 
         SaveInstalledId(rel.GetUniqueId());
         SetStatus("Ready to play!");
         state = LauncherState::Idle;
-    });
+        });
 }
 
 void Launcher::Launch() {
@@ -398,7 +415,8 @@ void Launcher::Launch() {
         fs::permissions(GetExePath(),
             fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
             fs::perm_options::add);
-    } catch (...) {}
+    }
+    catch (...) {}
 #endif
 
     if (worker.joinable()) worker.join();
@@ -426,18 +444,28 @@ void Launcher::Launch() {
         si.cb = sizeof(si);
         PROCESS_INFORMATION pi = {};
 
+        // Use mutable buffer to prevent undefined behavior
+        std::vector<char> cmdBuf(cmdline.begin(), cmdline.end());
+        cmdBuf.push_back('\0');
+
         BOOL ok = CreateProcessA(
             exe.c_str(),
-            const_cast<char*>(cmdline.c_str()),
+            cmdBuf.data(),
             nullptr, nullptr, FALSE, 0, nullptr,
             workdir.c_str(), &si, &pi
         );
 
         if (ok) {
-            WaitForSingleObject(pi.hProcess, INFINITE);
+            // Loop allows thread exit safely without zombieing the launcher window close
+            while (!abort_op) {
+                if (WaitForSingleObject(pi.hProcess, 100) == WAIT_OBJECT_0) {
+                    break;
+                }
+            }
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
-        } else {
+        }
+        else {
             char buf[256];
             snprintf(buf, sizeof(buf), "Launch failed (error %lu)", GetLastError());
             SetStatus(buf);
@@ -454,42 +482,51 @@ void Launcher::Launch() {
         std::system(cmd.c_str());
 #endif
 
-        SetStatus("Ready");
-        state = LauncherState::Idle;
-    });
+        if (!abort_op) {
+            SetStatus("Ready");
+            state = LauncherState::Idle;
+        }
+        });
 }
 
 void Launcher::ScanSkins() {
     config.skins.clear();
     fs::path dir = GetInstallDir() / "Windows64";
-    if (!fs::exists(dir)) return;
+
+    std::error_code ec;
+    if (!fs::exists(dir, ec) || ec) return;
 
     std::vector<std::string> skin_dirs;
-    for (auto& entry : fs::directory_iterator(dir)) {
-        if (entry.is_directory()) {
-            std::string name = entry.path().filename().string();
-            if (name.find("skin") != std::string::npos ||
-                std::any_of(name.begin(), name.end(), [](char c) { return c >= 'A' && c <= 'Z'; })) {
-                skin_dirs.push_back(entry.path().string());
+    try {
+        for (auto& entry : fs::directory_iterator(dir)) {
+            if (entry.is_directory()) {
+                std::string name = entry.path().filename().string();
+                if (name.find("skin") != std::string::npos ||
+                    std::any_of(name.begin(), name.end(), [](char c) { return c >= 'A' && c <= 'Z'; })) {
+                    skin_dirs.push_back(entry.path().string());
+                }
             }
         }
     }
+    catch (...) {}
 
     if (skin_dirs.empty()) skin_dirs.push_back((GetInstallDir() / "Windows64").string());
 
-    for (auto& sd : skin_dirs) {
-        for (auto& e : fs::directory_iterator(sd)) {
-            if (e.path().extension() == ".png" || e.path().extension() == ".PNG") {
-                SkinInfo info;
-                info.name = e.path().filename().string();
-                info.path = e.path().string();
-                config.skins.push_back(info);
+    try {
+        for (auto& sd : skin_dirs) {
+            for (auto& e : fs::directory_iterator(sd)) {
+                if (e.path().extension() == ".png" || e.path().extension() == ".PNG") {
+                    SkinInfo info;
+                    info.name = e.path().filename().string();
+                    info.path = e.path().string();
+                    config.skins.push_back(info);
+                }
             }
         }
     }
+    catch (...) {}
 
-    std::sort(config.skins.begin(), config.skins.end(),
-        [](const SkinInfo& a, const SkinInfo& b) { return a.name < b.name; });
+    std::sort(config.skins.begin(), config.skins.end(), [](const SkinInfo& a, const SkinInfo& b) { return a.name < b.name; });
 }
 
 void Launcher::LoadConfig() {
@@ -505,20 +542,27 @@ void Launcher::LoadConfig() {
         if (key == "username") {
             std::strncpy(config.username, val.c_str(), sizeof(config.username) - 1);
             config.username[sizeof(config.username) - 1] = '\0';
-        } else if (key == "ip") {
+        }
+        else if (key == "ip") {
             std::strncpy(config.ip, val.c_str(), sizeof(config.ip) - 1);
             config.ip[sizeof(config.ip) - 1] = '\0';
-        } else if (key == "port") {
+        }
+        else if (key == "port") {
             std::strncpy(config.port, val.c_str(), sizeof(config.port) - 1);
             config.port[sizeof(config.port) - 1] = '\0';
-        } else if (key == "is_server") {
+        }
+        else if (key == "is_server") {
             config.is_server = (val == "1");
-        } else if (key == "use_wine") {
+        }
+        else if (key == "use_wine") {
             config.use_wine = (val == "1");
-        } else if (key == "fullscreen") {
+        }
+        else if (key == "fullscreen") {
             config.fullscreen = (val == "1");
-        } else if (key == "skin") {
-            config.selected_skin = std::stoi(val);
+        }
+        else if (key == "skin") {
+            try { config.selected_skin = std::stoi(val); }
+            catch (...) {}
         }
     }
     LoadServerList();
